@@ -51,7 +51,7 @@ and requests equalizer status
 
 ### Command 01 0403 -- Set Volume
 
-Argument: volume  0x00-0xff
+Argument: volume  0x00-0x64
 
     55aa0104030bed
     55aa01040315e3
@@ -74,14 +74,14 @@ Argument 0x00-0x05
 
     0x12 0x0009 55aa01040500f6 # Natural
     0x0b 0x000b 55aa058414 32 32 32 32 32 69
-    0x12 0x0009 55aa01040502f4 # Pop
-    0x0b 0x000b 55aa058414 36 29 21 32 36 7b
     0x12 0x0009 55aa01040501f5 # Classic
     0x0b 0x000b 55aa058414 32 42 29 32 42 52
-    0x12 0x0009 55aa01040504f2 # Jazz
-    0x0b 0x000b 55aa058414 32 42 42 3a 3e 35
+    0x12 0x0009 55aa01040502f4 # Pop
+    0x0b 0x000b 55aa058414 36 29 21 32 36 7b
     0x12 0x0009 55aa01040503f3 # Bass
     0x0b 0x000b 55aa058414 3e 42 32 32 3a 45
+    0x12 0x0009 55aa01040504f2 # Jazz
+    0x0b 0x000b 55aa058414 32 42 42 3a 3e 35
 
 See status 8414 for return value
 
@@ -204,6 +204,8 @@ Argument 01 or 00 for ON/OFF
 
 ### Command 01 0808 -- brightness (used by app for white light)
 
+Argument brightness 00-ff
+
     55aa01080801ee # low
     55aa01080811de
     55aa01080825ca
@@ -232,10 +234,15 @@ Triggers notification
     55aa01080904ea # evening sun
     55aa01080905e9 # candle
 
-### Command 01 0815 -- ??
+### Command 01 0815 -- Color status
 
     0x12 0x0009 55aa01081506dc
     0x0b 0x000b 55aa0a881500000037c8100101167fb3
+
+### Command 00 0b0a -- ??
+
+    0x12 0x0009 55aa000b0aeb
+    0x1b 0x0006 55aa048b0a00f0000077
 
 ## Status return values
 
@@ -244,6 +251,8 @@ Triggers notification
 | 00 | 01 | 02 | 03 | 04 | 05 | 06 |
 |----|----|----|----|----|----|----|
 | 55 | aa | 01 | 84 | 04 | VV | CS |
+
+VV = volume 0-0x64
 
 ### Status 05 8414 -- Equalizer
 
@@ -259,7 +268,13 @@ V5 =  8k
 
 Values are from 0x00 - 0x64
 
-## Notification value
+## Status 0a 0815
+
+| 00 | 01 | 02 | 03 | 04 | 05 | 06 | 07 | 08 | 09 | 0a | 0b | 0c | 0d | 0e | 0f |
+|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|
+| 55 | aa | 0a | 08 | 15 | RR | GG | BB | WW | YY | BR | 01 | 01 | 16 | 7f | CS |
+
+## Notification value 09 8818
 
 | 00 | 01 | 02 | 03 | 04 | 05 | 06 | 07 | 08 | 09 | 0a | 0b | 0c | 0d | 0e |
 |----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|

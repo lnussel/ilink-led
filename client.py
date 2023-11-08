@@ -51,6 +51,8 @@ class iLinkLED(object):
     name = None
     address = None
 
+    status = {}
+
     def __init__(cls, dev):
         cls.dev = dev
         #logger.debug("%s %s", dev.object_path, dev.dbus_interface)
@@ -149,30 +151,42 @@ class iLinkLED(object):
 
     def _send(self, *b):
         cmd = self._build_cmd(*b)
-        logger.debug("%s", bytes(get_prop(self.client_chrc.object_path, self.client_chrc.dbus_interface, 'Value')))
-        logger.debug("send %s", cmd)
+        logger.debug("send %s", ''.join(["%02x"%b for b in cmd]))
         self.write_chrc.WriteValue(cmd, {'type': 'request'})
         val = self.read_chrc.ReadValue([])
-        logger.debug("read %s", val)
-        logger.debug("%s", bytes(get_prop(self.client_chrc.object_path, self.client_chrc.dbus_interface, 'Value')))
+        self.parse_status(val)
 
     def parse_status(self, value):
-        if value[0] != 0x55 or value[1] != 0xaa:
+        logger.debug("status %s", ''.join(["%02x"%b for b in value]))
+
+        if len(value) < 5 or value[0] != 0x55 or value[1] != 0xaa:
             return False
 
-        if value[2] == 0x09 and value[3] == 0x88 and value[4] == 0x18:
-            self.red = value[5]
-            self.green = value[6]
-            self.blue = value[7]
-            self.cold = value[8]
-            self.warm = value[9]
-            self.bright = value[10]
-            logger.info("Color #%02x%02x%02x", self.red, self.green, self.blue)
-            logger.info("Cold %02x", self.cold)
-            logger.info("Warm %02x", self.warm)
-            logger.info("Brightness %02x", self.bright)
+        if (value[2] == 0x0a and value[3] == 0x88 and value[4] == 0x15) \
+                or (value[2] == 0x09 and value[3] == 0x88 and value[4] == 0x18):
+            self.status['red'] = int(value[5])
+            self.status['green'] = int(value[6])
+            self.status['blue'] = int(value[7])
+            self.status['cold'] = int(value[8])
+            self.status['warm'] = int(value[9])
+            self.status['bright'] = int(value[10])
+            logger.info("Color #%02x%02x%02x", self.status['red'], self.status['green'], self.status['blue'])
+            logger.info("Cold %02x", self.status['cold'])
+            logger.info("Warm %02x", self.status['warm'])
+            logger.info("Brightness %02x", self.status['bright'])
             return True
 
+        if value[2] == 0x05 and value[3] == 0x84 and value[4] == 0x14:
+            self.status['equalizer'] = [int(i) for i in value[5:10]]
+            logger.info("Equalizer %s", self.status['equalizer'])
+            return True
+
+        if value[2] == 0x01 and value[3] == 0x84 and value[4] == 0x04:
+            self.status['volume'] = int(value[5])
+            logger.info("Volume %02x", self.status['volume'])
+            return True
+
+        logger.debug("unhandled status")
         return False
 
     def start(self):
@@ -200,12 +214,79 @@ class iLinkLED(object):
         else:
             logging.error("Unknown value, choose from %s", ', '.join(named))
 
+    def set_scene(self, name):
+        scenes = ['rainbow1', 'rainbow2', 'heartbeat', 'breathe_red', 'breathe_green',
+                  'breathe_blue', 'alarm', 'strobe', 'color_change', 'green_mood',
+                  'evening_sun', 'rhythm']
+
+        if name in scenes:
+            self._send(0x08, 0x06, scenes.index(name)+1)
+        else:
+            logging.error("Unknown value, choose from %s", ', '.join(scenes))
+
+    def set_equalizer(self, name):
+        profiles = ['natural', 'classic', 'pop', 'bass', 'jazz']
+        if ',' in name:
+            values = name.split(',')
+            if len(values) == 5:
+                for i in range(0, 5):
+                    val = int(values[i])
+                    if val > 100:
+                        logger.error("Value must be < 100")
+                    else:
+                        self._send(0x04, 0x0c + i, val)
+            else:
+                logging.error("Must be exactly five values")
+        elif name in profiles:
+            self._send(0x04, 0x05, profiles.index(name))
+        else:
+            logging.error("Unknown value, choose from %s", ', '.join(named))
+
     def set_brightness(self, value):
         if value[0] == 'x':
             val = int(value[1:], 16)
         else:
             val = int(0xFF*int(value)/100)&0xFF
         self._send(0x08, 0x08, val)
+
+    def set_volume(self, value):
+        if value[0] == 'x':
+            val = int(value[1:], 16)
+        else:
+            val = int(0xFF*int(value)/100)&0xFF
+        if val > 100:
+            logger.error("Value must be < 100")
+        else:
+            self._send(0x04, 0x03, val)
+
+    def power(self, value):
+        self._send(0x08, 0x05, 1 if value else 0)
+
+    def update_status(self):
+        # volume
+        self._send(0x04, 0x04)
+        # equalizer
+        self._send(0x04, 0x14)
+        # light
+        self._send(0x08, 0x15, 0x06)
+        if False:
+            # unknown
+            self._send(0x05, 0x01, 0x11, 0x09, 0x33)
+            # unknown
+            self._send(0x05, 0x04, 0x06)
+            # unknown
+            self._send(0x05, 0x08, 0x06)
+            # unknown
+            self._send(0x05, 0x0c, 0x06)
+            # unknown
+            self._send(0x05, 0x22, 0x06)
+            # unknown
+            self._send(0x05, 0x23, 0x06)
+
+    def print_status(self):
+        self.update_status()
+        for k, v in self.status.items():
+            print(k, v)
 
 def generic_error_cb(error):
     global mainloop
@@ -286,6 +367,15 @@ def main(args):
             logger.error("Device not ready")
             continue
 
+        if args.equalizer:
+            ilinkled.set_equalizer(args.equalizer)
+
+        if args.volume:
+            ilinkled.set_volume(args.volume)
+
+        if args.scene:
+            ilinkled.set_scene(args.scene)
+
         if args.color:
             ilinkled.set_color(args.color)
 
@@ -295,8 +385,16 @@ def main(args):
         if args.brightness:
             ilinkled.set_brightness(args.brightness)
 
-        # run mainloop to get debug out put from notifications
-        if logger.level > logging.INFO:
+        if args.on:
+            ilinkled.power(True)
+        elif args.off:
+            ilinkled.power(False)
+
+        if args.status:
+            ilinkled.print_status()
+
+        # run mainloop to get debug output from notifications
+        if logger.getEffectiveLevel() < logging.INFO:
             GLib.timeout_add_seconds(1, lambda: mainloop.quit() )
             mainloop.run()
 
@@ -311,11 +409,17 @@ if __name__ == '__main__':
     parser.add_argument("--dry", action="store_true", help="dry run")
     parser.add_argument("--debug", action="store_true", help="debug output")
     parser.add_argument("--verbose", action="store_true", help="verbose")
+    parser.add_argument("--scene", action="store", help="scene name")
     parser.add_argument("--color", action="store", help="color name")
     parser.add_argument("--white", action="store", help="set white light mode")
     parser.add_argument("--brightness", action="store", help="set brightness")
     parser.add_argument("--stay-connected", action="store_true", help="don't disconnect devices on exit")
     parser.add_argument("--scan", action="store_true", help="trigger scan if no device found")
+    parser.add_argument("--equalizer", action="store", help="set equalizer")
+    parser.add_argument("--volume", action="store", help="set volume")
+    parser.add_argument("--on", action="store_true", help="turn the light on")
+    parser.add_argument("--off", action="store_true", help="turn light off")
+    parser.add_argument("--status", action="store_true", help="read status")
 
     args = parser.parse_args()
 
