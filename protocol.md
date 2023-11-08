@@ -3,9 +3,9 @@
 Via GATT the device receives write requests on characteristic
 0000a040-0000-1000-8000-00805f9b34fb. Some command return status that can be
 fetched by reading characterstic
-0000a041-0000-1000-8000-00805f9b34fb. To enable notifications, the
-value 0x0100 has to be written to handle characterstic
-00002902-0000-1000-8000-00805f9b34fb
+0000a041-0000-1000-8000-00805f9b34fb. Others notify on
+0000a042-0000-1000-8000-00805f9b34fb. Notifcations can be enabled by writing
+value 0x0100 to characterstic 00002902-0000-1000-8000-00805f9b34fb
 
 
 The following example enables notifications, sets some white light
@@ -263,13 +263,13 @@ Values are from 0x00 - 0x64
 
 | 00 | 01 | 02 | 03 | 04 | 05 | 06 | 07 | 08 | 09 | 0a | 0b | 0c | 0d | 0e |
 |----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|
-| 55 | aa | 09 | 88 | 18 | RR | GG | BB | T1 | T2 | BR | 01 | 01 | 16 | CS |
+| 55 | aa | 09 | 88 | 18 | RR | GG | BB | WW | YY | BR | 01 | 01 | 16 | CS |
 
 RR = Red value,
 GG = Green value,
 BB = Blue value,
-T1 = White temperature,
-T2 = White temperature,
+WW = White value,
+YY = Yellow value,
 BR = Brightness
 
 ## Checksum calculation

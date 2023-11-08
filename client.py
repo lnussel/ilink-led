@@ -35,6 +35,7 @@ CLIENT_DESCR_UUID =      '00002902-0000-1000-8000-00805f9b34fb'
 ILINK_SERVICE_UUID =     '0000a032-0000-1000-8000-00805f9b34fb'
 ILINK_WRITE_CHR_UUID =   '0000a040-0000-1000-8000-00805f9b34fb'
 ILINK_READ_CHR_UUID =    '0000a041-0000-1000-8000-00805f9b34fb'
+# notifications come in via this one
 ILINKC_CLIENT_CHR_UUID = '0000a042-0000-1000-8000-00805f9b34fb'
 
 # dictionary of path -> ledobj
@@ -43,7 +44,7 @@ _leds = {}
 class iLinkLED(object):
 # The objects that we interact with.
     service = None
-    client_dscr = None
+    client_chrc = None
     write_chrc = None
     read_chrc = None
     dev = None
@@ -75,19 +76,23 @@ class iLinkLED(object):
                 uuid = interface[GATT_SERVICE_IFACE]['UUID']
             else:
                 return False
+
             #logger.debug("%s: %s", path, uuid)
             if uuid == ILINK_SERVICE_UUID:
                 logger.debug("found service interface %s", path)
                 led.service = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_SERVICE_IFACE)
-            if uuid == ILINKC_CLIENT_CHR_UUID:
+            elif uuid == ILINKC_CLIENT_CHR_UUID:
                 logger.debug("found client descriptor at %s", path)
-                led.client_dscr = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_DSCR_IFACE)
+                led.client_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
             elif uuid == ILINK_WRITE_CHR_UUID:
                 logger.debug("found write charactersistic at %s", path)
                 led.write_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
             elif uuid == ILINK_READ_CHR_UUID:
                 logger.debug("found read charactersistic at %s", path)
                 led.read_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
+
+            if led.ready():
+                led.start()
         else:
             if not 'org.bluez.Device1' in interface or not 'Name' in interface['org.bluez.Device1']:
                 return False
@@ -106,12 +111,16 @@ class iLinkLED(object):
 
                 if interface['org.bluez.Device1']['Connected']:
                     connected_devices.append(led)
+                    if led.ready():
+                        led.start()
                 else:
                     logger.info("Connecting %s", name)
 
                     global mainloop
                     def connect_cb(l):
                         logger.info("Connected %s", l.name)
+                        if l.ready():
+                            l.start()
                         connected_devices.append(l)
                         mainloop.quit()
 
@@ -129,7 +138,7 @@ class iLinkLED(object):
         return False
 
     def ready(self):
-        return not (self.dev is None or self.service is None or self.client_dscr is None or self.write_chrc is None or self.read_chrc is None)
+        return not (self.dev is None or self.service is None or self.client_chrc is None or self.write_chrc is None or self.read_chrc is None)
 
     def _build_cmd(self, *b):
         count = len(b)-2
@@ -140,8 +149,41 @@ class iLinkLED(object):
 
     def _send(self, *b):
         cmd = self._build_cmd(*b)
+        logger.debug("%s", bytes(get_prop(self.client_chrc.object_path, self.client_chrc.dbus_interface, 'Value')))
         logger.debug("send %s", cmd)
         self.write_chrc.WriteValue(cmd, {'type': 'request'})
+        val = self.read_chrc.ReadValue([])
+        logger.debug("read %s", val)
+        logger.debug("%s", bytes(get_prop(self.client_chrc.object_path, self.client_chrc.dbus_interface, 'Value')))
+
+    def parse_status(self, value):
+        if value[0] != 0x55 or value[1] != 0xaa:
+            return False
+
+        if value[2] == 0x09 and value[3] == 0x88 and value[4] == 0x18:
+            self.red = value[5]
+            self.green = value[6]
+            self.blue = value[7]
+            self.cold = value[8]
+            self.warm = value[9]
+            self.bright = value[10]
+            logger.info("Color #%02x%02x%02x", self.red, self.green, self.blue)
+            logger.info("Cold %02x", self.cold)
+            logger.info("Warm %02x", self.warm)
+            logger.info("Brightness %02x", self.bright)
+            return True
+
+        return False
+
+    def start(self):
+        logger.debug("Enable notifications")
+        def changed_cb(interface, changed, invalidated):
+            if interface == 'org.bluez.GattCharacteristic1' and 'Value' in changed:
+                logger.debug("Changed: %s", bytes(changed['Value']))
+                self.parse_status(changed['Value'])
+
+        dbus.Interface(bus.get_object('org.bluez', self.client_chrc.object_path), DBUS_PROP_IFACE).connect_to_signal("PropertiesChanged", changed_cb)
+        self.client_chrc.StartNotify()
 
     def set_color(self, name):
         if name == 'random':
@@ -252,6 +294,11 @@ def main(args):
 
         if args.brightness:
             ilinkled.set_brightness(args.brightness)
+
+        # run mainloop to get debug out put from notifications
+        if logger.level > logging.INFO:
+            GLib.timeout_add_seconds(1, lambda: mainloop.quit() )
+            mainloop.run()
 
     if not args.stay_connected:
         disconnect_all()
