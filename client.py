@@ -40,25 +40,19 @@ ILINKC_CLIENT_CHR_UUID = '0000a042-0000-1000-8000-00805f9b34fb'
 # dictionary of path -> ledobj
 _leds = {}
 
-class iLinkLED(object):
-# The objects that we interact with.
-    service = None
-    client_chrc = None
-    write_chrc = None
-    read_chrc = None
+class BLERGBLED(object):
+
     dev = None
     name = None
     address = None
-    connected = False
+    # tristate: None = nothing, False = connecting in progress, True = connected
+    connected = None
 
     status = {}
 
     def __init__(cls, dev):
         cls.dev = dev
-        #logger.debug("%s %s", dev.object_path, dev.dbus_interface)
 
-    # this method is supposed to be called on all device paths. It will pick the
-    # relvant ones.
     @staticmethod
     def handle(path, interface):
         logger.debug(path)
@@ -66,91 +60,103 @@ class iLinkLED(object):
         if len(p) < 5 or not p[4].startswith('dev_'):
             return False
 
-        # found a known device, check whether path is a charactersistic we want
-        # to handle
+        global mainloop
+
+        led = None
+        # found a known device, let it handle the interface
         if p[4] in _leds:
             led = _leds[p[4]]
-            if GATT_CHRC_IFACE in interface:
-                uuid = interface[GATT_CHRC_IFACE]['UUID']
-            elif GATT_DSCR_IFACE in interface:
-                uuid = interface[GATT_DSCR_IFACE]['UUID']
-            elif GATT_SERVICE_IFACE in interface:
-                uuid = interface[GATT_SERVICE_IFACE]['UUID']
-            else:
-                return False
-
-            #logger.debug("%s: %s", path, uuid)
-            if uuid == ILINK_SERVICE_UUID:
-                logger.debug("found service interface %s", path)
-                led.service = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_SERVICE_IFACE)
-            elif uuid == ILINKC_CLIENT_CHR_UUID:
-                logger.debug("found client descriptor at %s", path)
-                led.client_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
-            elif uuid == ILINK_WRITE_CHR_UUID:
-                logger.debug("found write charactersistic at %s", path)
-                led.write_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
-            elif uuid == ILINK_READ_CHR_UUID:
-                logger.debug("found read charactersistic at %s", path)
-                led.read_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
-
-            if led.ready():
-                led.start()
-        else:
-            if not 'org.bluez.Device1' in interface or not 'Name' in interface['org.bluez.Device1']:
-                return False
-
-            name = interface['org.bluez.Device1']['Name']
-            if name == 'iLink app':
-                address = interface['org.bluez.Device1']['Address']
-                logger.debug("Found device %s %s", name, address)
-
-                dev = dbus.Interface(bus.get_object('org.bluez', path), 'org.bluez.Device1')
-                led = iLinkLED(dev)
-                led.name = name
-                led.address = address
+            led.add_interface(path, interface)
+        else: # new device, check if any known class can handle it
+            for cls in (iLinkLED,):
+                led = cls.handle(path, interface)
+                if led is None:
+                    continue
 
                 _leds[p[4]] = led
-
-                if interface['org.bluez.Device1']['Connected']:
+                if interface['org.bluez.Device1']['Connected'] and led.connected is None:
                     connected_devices.append(led)
                     led.connected = True
-                    if led.ready():
-                        led.start()
-                else:
-                    logger.info("Connecting %s", name)
 
-                    def connect_cb(l):
-                        logger.info("Connected %s", l.name)
-                        global discovery_timeout
-                        if discovery_timeout:
-                            GLib.source_remove(discovery_timeout)
-                            global mainloop
-                            mainloop.quit()
+        if led:
+            led.start()
 
-                        led.connected = True
-                        if l.ready():
-                            l.start()
-                        connected_devices.append(l)
+        return led
 
-                    def connect_timeout_cb(l):
-                        if not led.connected:
-                            logger.error("Timeout connecting %s", l.name)
+class iLinkLED(BLERGBLED):
 
-                    global mainloop
-                    if mainloop.is_running():
-                        dev.Connect(reply_handler=lambda: connect_cb(led), error_handler=generic_error_cb)
-                    else:
-                        if dev.Connect():
-                            connect_cb(led)
-                        else:
-                            logger.error("Failed to connect %s", name)
+    # The objects that we interact with.
+    service = None
+    client_chrc = None
+    write_chrc = None
+    read_chrc = None
+    _started = False
 
-                    return True
+    def __init__(self, dev):
+        super().__init__(dev)
+        #logger.debug("%s %s", dev.object_path, dev.dbus_interface)
 
-        return False
+    def add_interface(self, path, interface):
 
+        if GATT_CHRC_IFACE in interface:
+            uuid = interface[GATT_CHRC_IFACE]['UUID']
+        elif GATT_DSCR_IFACE in interface:
+            uuid = interface[GATT_DSCR_IFACE]['UUID']
+        elif GATT_SERVICE_IFACE in interface:
+            uuid = interface[GATT_SERVICE_IFACE]['UUID']
+        else:
+            return False
+
+        if uuid == ILINK_SERVICE_UUID:
+            logger.debug("found service interface %s", path)
+            self.service = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_SERVICE_IFACE)
+        elif uuid == ILINKC_CLIENT_CHR_UUID:
+            logger.debug("found client descriptor at %s", path)
+            self.client_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
+        elif uuid == ILINK_WRITE_CHR_UUID:
+            logger.debug("found write charactersistic at %s", path)
+            self.write_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
+        elif uuid == ILINK_READ_CHR_UUID:
+            logger.debug("found read charactersistic at %s", path)
+            self.read_chrc = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, path), GATT_CHRC_IFACE)
+        else:
+            return False
+
+        self.start()
+
+        return True
+
+    # this method is supposed to be called on all device paths. It will pick the
+    # relvant ones.
+    # XXX: this should probably return some enum indicating whether it's
+    # connected resp complete. Then do the async connecting etc outside
+    @staticmethod
+    def handle(path, interface):
+
+        if not 'org.bluez.Device1' in interface or not 'Name' in interface['org.bluez.Device1']:
+            return None
+
+        name = interface['org.bluez.Device1']['Name']
+        if name != 'iLink app':
+            return None
+
+        address = interface['org.bluez.Device1']['Address']
+        logger.debug("Found device %s %s", name, address)
+
+        dev = dbus.Interface(bus.get_object('org.bluez', path), 'org.bluez.Device1')
+        led = iLinkLED(dev)
+        led.name = name
+        led.address = address
+
+        return led
+
+    @property
+    def complete(self):
+        return not (self.dev is None or self.service is None or self.client_chrc is None or self.write_chrc is None or self.read_chrc is None)
+
+    @property
     def ready(self):
-        return not (not self.connected or self.dev is None or self.service is None or self.client_chrc is None or self.write_chrc is None or self.read_chrc is None)
+        return self.connected and self.complete
 
     def _build_cmd(self, *b):
         count = len(b)-2
@@ -200,6 +206,8 @@ class iLinkLED(object):
         return False
 
     def start(self):
+        if not self.ready or self._started:
+            return
         logger.debug("Enable notifications")
         def changed_cb(interface, changed, invalidated):
             if interface == 'org.bluez.GattCharacteristic1' and 'Value' in changed:
@@ -208,6 +216,7 @@ class iLinkLED(object):
 
         dbus.Interface(bus.get_object('org.bluez', self.client_chrc.object_path), DBUS_PROP_IFACE).connect_to_signal("PropertiesChanged", changed_cb)
         self.client_chrc.StartNotify()
+        self._started = True
 
     def set_color(self, name):
         if name == 'random':
@@ -318,13 +327,34 @@ def interfaces_removed_cb(object_path, interfaces):
 def interfaces_added_cb(object_path, interfaces):
     logger.debug("interfaces added %s %s", object_path, type(interfaces))
 
-    iLinkLED.handle(object_path, interfaces)
+    led = BLERGBLED.handle(object_path, interfaces)
+    if led and led.connected is None:
+        def connect_cb(l):
+            logger.info("Connected %s", l.name)
+            led.connected = True
+            global connected_devices
+            connected_devices.append(l)
+            global discovery_timeout
+            if discovery_timeout:
+                GLib.source_remove(discovery_timeout)
+                discovery_timeout = None
+                global mainloop
+                mainloop.quit()
+            l.start()
+
+        def connect_timeout_cb(l):
+            if not led.connected:
+                logger.error("Timeout connecting %s", l.name)
+
+        led.connected = False
+        led.dev.Connect(reply_handler=lambda: connect_cb(led), error_handler=generic_error_cb)
+
 
 def disconnect_all():
     for l in connected_devices:
-        dev = l.dev
         logger.debug("Disconnecting %s %s", l.name, l.address)
-        dev.Disconnect()
+        l.dev.Disconnect()
+        l.connected = None
 
 # XXX: shouldn't there be some convenience function already?
 def get_prop(path, ifacename, propname):
@@ -350,7 +380,17 @@ def main(args):
 
     # List characteristics found
     for path, interfaces in list(objects.items()):
-        if iLinkLED.handle(path, interfaces):
+        led = BLERGBLED.handle(path, interfaces)
+        if led:
+            if led.connected is None:
+                led.connected = False
+                logger.debug("Connecting %s", led.name)
+                led.dev.Connect()
+                led.connected = True
+                global connected_devices
+                connected_devices.append(led)
+            logger.debug("%s: %d %d %d", led.name, led.complete, led.connected, led.ready)
+            led.start()
             continue
 
         if 'org.bluez.Adapter1' in interfaces:
@@ -371,10 +411,14 @@ def main(args):
 #            device.StartDiscovery(reply_handler=check_discovery, error_handler=generic_error_cb)
             device.StartDiscovery()
 
-            logger.debug("Running mainloop")
             global discovery_timeout
-            discovery_timeout = GLib.timeout_add_seconds(15, lambda: mainloop.quit() )
-            logger.debug("timeout %s", discovery_timeout)
+            def end_discovery():
+                logger.debug("discovery timeout")
+                discovery_timeout = None
+                mainloop.quit()
+
+            discovery_timeout = GLib.timeout_add_seconds(15, end_discovery)
+            logger.debug("Running mainloop")
             mainloop.run()
 
     if len(_leds) == 0:
@@ -382,9 +426,13 @@ def main(args):
         return 1
 
     for ilinkled in _leds.values():
-        if not ilinkled.ready():
-            logger.error("Device not ready")
-            continue
+        if not ilinkled.ready:
+            # FIXME: this needs to be done properly obviously :-)
+            GLib.timeout_add_seconds(3, lambda:mainloop.quit())
+            logger.debug("Device not ready, waiting a bit")
+            mainloop.run()
+            if not ilinkled.ready:
+                continue
 
         if args.equalizer:
             ilinkled.set_equalizer(args.equalizer)
