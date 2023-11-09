@@ -1,2 +1,2 @@
-- discovering and connecting async doesn't really work
+- discovering and connecting is flaky
 - create common base class to allow other implementations
