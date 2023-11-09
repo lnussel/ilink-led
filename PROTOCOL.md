@@ -202,6 +202,15 @@ Argument 01 or 00 for ON/OFF
     55aa0108060be6 # Evening sun
     55aa0108060ce5 # Rhythm
 
+### Command 01 0807 -- White light Color temperature
+
+Argument value 00-ff
+
+    0x12 0x0009 55aa01080747a9
+    0x0b 0x000b
+    0x1b 0x0006 55aa098818000000b847ff01011641
+
+
 ### Command 01 0808 -- brightness (used by app for white light)
 
 Argument brightness 00-ff
@@ -224,7 +233,7 @@ Argument brightness 00-ff
     55aa010808d619
     55aa010808f8f7 # high
 
-### Command 01 0809 -- White light temperature
+### Command 01 0809 -- White light temperature profile
 
 Triggers notification
 
