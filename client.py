@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# SPDX-License-Identifier: LGPL-2.1-or-later
+# SPDX-License-Identifier: MIT
 
 
 import argparse
@@ -14,8 +14,7 @@ from gi.repository import GLib
 bus = None
 mainloop = None
 logger = None
-
-quit_timer = None
+discovery_timeout = None
 
 # leds that are connected
 connected_devices = []
@@ -50,13 +49,14 @@ class iLinkLED(object):
     dev = None
     name = None
     address = None
+    connected = False
 
     status = {}
 
     def __init__(cls, dev):
         cls.dev = dev
         #logger.debug("%s %s", dev.object_path, dev.dbus_interface)
-    
+
     # this method is supposed to be called on all device paths. It will pick the
     # relvant ones.
     @staticmethod
@@ -113,34 +113,44 @@ class iLinkLED(object):
 
                 if interface['org.bluez.Device1']['Connected']:
                     connected_devices.append(led)
+                    led.connected = True
                     if led.ready():
                         led.start()
                 else:
                     logger.info("Connecting %s", name)
 
-                    global mainloop
                     def connect_cb(l):
                         logger.info("Connected %s", l.name)
+                        global discovery_timeout
+                        if discovery_timeout:
+                            GLib.source_remove(discovery_timeout)
+                            global mainloop
+                            mainloop.quit()
+
+                        led.connected = True
                         if l.ready():
                             l.start()
                         connected_devices.append(l)
-                        mainloop.quit()
 
                     def connect_timeout_cb(l):
-                        logger.error("Timeout connecting %s", l.name)
-                        mainloop.quit()
+                        if not led.connected:
+                            logger.error("Timeout connecting %s", l.name)
 
-                    dev.Connect(reply_handler=lambda: connect_cb(led), error_handler=generic_error_cb)
-                    if not mainloop.is_running():
-                        GLib.timeout_add_seconds(10, lambda: connect_timeout_cb(led) )
-                        mainloop.run()
+                    global mainloop
+                    if mainloop.is_running():
+                        dev.Connect(reply_handler=lambda: connect_cb(led), error_handler=generic_error_cb)
+                    else:
+                        if dev.Connect():
+                            connect_cb(led)
+                        else:
+                            logger.error("Failed to connect %s", name)
 
                     return True
 
         return False
 
     def ready(self):
-        return not (self.dev is None or self.service is None or self.client_chrc is None or self.write_chrc is None or self.read_chrc is None)
+        return not (not self.connected or self.dev is None or self.service is None or self.client_chrc is None or self.write_chrc is None or self.read_chrc is None)
 
     def _build_cmd(self, *b):
         count = len(b)-2
@@ -207,12 +217,20 @@ class iLinkLED(object):
             rgb = webcolors.name_to_rgb(name)
         self._send(0x08, 0x02, *rgb)
 
-    def set_white(self, name):
+    def set_white(self, value):
         named = ['cold', 'natural', 'sunlight', 'evening', 'candle']
-        if name in named:
-            self._send(0x08, 0x09, named.index(name)+1)
+        if value in named:
+            self._send(0x08, 0x09, named.index(value)+1)
         else:
-            logging.error("Unknown value, choose from %s", ', '.join(named))
+            if value[0] == 'x':
+                val = int(value[1:], 16)
+            else:
+                val = int(0xFF*int(value)/100)&0xFF
+
+            if val > 255:
+                logging.error("Invalid value, choose from %s, hex < xff or integer < 100", ', '.join(named))
+            else:
+                self._send(0x08, 0x07, val)
 
     def set_scene(self, name):
         scenes = ['rainbow1', 'rainbow2', 'heartbeat', 'breathe_red', 'breathe_green',
@@ -322,8 +340,6 @@ def main(args):
     global mainloop
     mainloop = GLib.MainLoop()
 
-    timeout = 1
-
     om = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, '/'), DBUS_OM_IFACE)
     om.connect_to_signal('InterfacesRemoved', interfaces_removed_cb)
     om.connect_to_signal('InterfacesAdded', interfaces_added_cb)
@@ -355,7 +371,10 @@ def main(args):
 #            device.StartDiscovery(reply_handler=check_discovery, error_handler=generic_error_cb)
             device.StartDiscovery()
 
-            GLib.timeout_add_seconds(15, lambda: mainloop.quit() )
+            logger.debug("Running mainloop")
+            global discovery_timeout
+            discovery_timeout = GLib.timeout_add_seconds(15, lambda: mainloop.quit() )
+            logger.debug("timeout %s", discovery_timeout)
             mainloop.run()
 
     if len(_leds) == 0:
